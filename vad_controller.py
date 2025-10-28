@@ -1,8 +1,5 @@
 """
 WebRTC VAD (Voice Activity Detection) Based Automatic Recording Controller
-
-This module integrates with dnote_main.py's recording functionality to provide
-automatic pause/resume/stop features based on voice activity detection.
 """
 
 import webrtcvad
