@@ -1,11 +1,8 @@
 """
-WebRTC VAD (Voice Activity Detection)–based automatic recording controller.
+WebRTC VAD (Voice Activity Detection) Based Automatic Recording Controller
 
-This module integrates with dnote_main.py's recording logic and provides
-automatic pause/resume/stop behaviors driven by speech activity.
-
-Goal: keep STT input focused on speech segments to reduce hallucinations
-caused by long silent periods.
+This module integrates with dnote_main.py's recording functionality to provide
+automatic pause/resume/stop features based on voice activity detection.
 """
 
 import webrtcvad
@@ -15,15 +12,15 @@ import logging
 
 
 class VADController:
-    """Automatic recorder controller based on WebRTC VAD.
+    """WebRTC VAD-based Automatic Recording Controller
 
-    Uses voice activity to automatically pause, resume, and stop recording.
+    Automatically pauses/resumes/stops recording based on voice activity detection.
     """
 
     # State definitions
-    STATE_IDLE = 0       # Idle (not currently recording; collecting prebuffer only)
-    STATE_RECORDING = 1  # Actively recording (should write frames)
-    STATE_PAUSED = 2     # Temporarily paused (collecting prebuffer only)
+    STATE_IDLE = 0       # Idle state
+    STATE_RECORDING = 1  # Recording
+    STATE_PAUSED = 2     # Paused
 
     def __init__(self,
                  sample_rate=32000,
@@ -39,29 +36,25 @@ class VADController:
                  grace_period_sec=20):
         """
         Args:
-            sample_rate: Sampling rate in Hz (one of 8000, 16000, 32000, 48000).
-            frame_ms: Frame length in milliseconds (one of 10, 20, 30).
-            aggr: VAD aggressiveness (0–3; 0 = lenient, 3 = strict).
-            start_window_ms: Window (ms) for deciding start/resume.
-            pause_window_ms: Window (ms) for deciding pause.
-            stop_window_ms: Window (ms) for deciding automatic stop.
-            voice_ratio: Minimum voiced ratio (0.0–1.0) to treat a window as speech.
-            silence_ratio: Minimum unvoiced ratio (0.0–1.0) to treat a window as silence.
-            check_interval: Compute ratios every N frames (performance/anti-flutter).
-            prebuffer_ms: Prebuffer length (ms) to prepend on start/resume to avoid clipping onsets.
-            grace_period_sec: Grace period (s) after session start during which auto-pause is disabled.
+            sample_rate: Sample rate (must be 8000, 16000, 32000, or 48000)
+            frame_ms: Frame length in ms (must be 10, 20, or 30)
+            aggr: VAD aggressiveness (0-3, 0=lenient, 3=aggressive)
+            start_window_ms: Window for start/resume decision (ms)
+            pause_window_ms: Window for pause decision (ms)
+            stop_window_ms: Window for auto-stop decision (ms)
+            voice_ratio: Minimum ratio to detect as voice (0.0-1.0)
+            silence_ratio: Minimum ratio to detect as silence (0.0-1.0)
+            check_interval: Decision check interval (number of frames)
+            prebuffer_ms: Pre-buffer length (ms)
+            grace_period_sec: Grace period (seconds) - no auto-pause during this time
         """
         # Validate WebRTC VAD supported sample rates
         if sample_rate not in (8000, 16000, 32000, 48000):
-            raise ValueError(
-                f"Unsupported sample rate: {sample_rate}. Must be 8000, 16000, 32000, or 48000"
-            )
+            raise ValueError(f"Unsupported sample rate: {sample_rate}. Must be 8000, 16000, 32000, or 48000")
 
         # Validate frame length
         if frame_ms not in (10, 20, 30):
-            raise ValueError(
-                f"Unsupported frame length: {frame_ms}. Must be 10, 20, or 30"
-            )
+            raise ValueError(f"Unsupported frame length: {frame_ms}. Must be 10, 20, or 30")
 
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
@@ -76,23 +69,21 @@ class VADController:
         self.recording_start_time = None
         self.grace_period_sec = grace_period_sec
 
-        # Convert windows from ms to frame counts
+        # Window sizes (converted to frame units)
         self.start_window_frames = max(1, int(start_window_ms / frame_ms))
         self.pause_window_frames = max(1, int(pause_window_ms / frame_ms))
         self.stop_window_frames = max(1, int(stop_window_ms / frame_ms))
         self.prebuffer_frames = int(prebuffer_ms / frame_ms)
 
-        # Thresholds and cadence
+        # Thresholds
         self.voice_ratio_threshold = voice_ratio
         self.silence_ratio_threshold = silence_ratio
         self.check_interval = check_interval
 
-        # Buffers: keep up to the maximum needed window size
-        max_window = max(
-            self.start_window_frames,
-            self.pause_window_frames,
-            self.stop_window_frames
-        )
+        # Buffers - maintain up to max window size
+        max_window = max(self.start_window_frames,
+                        self.pause_window_frames,
+                        self.stop_window_frames)
         self.sliding_window = collections.deque(maxlen=max_window)
         self.prebuffer = collections.deque(maxlen=self.prebuffer_frames)
 
@@ -100,31 +91,27 @@ class VADController:
         self.frame_counter = 0
         self.pause_count = 0
 
-        logging.info(
-            f"VAD windows (ms): start={start_window_ms}, pause={pause_window_ms}, stop={stop_window_ms}"
-        )
-        logging.info(
-            f"VAD thresholds: voice_ratio={voice_ratio}, silence_ratio={silence_ratio}"
-        )
+        logging.info(f"VAD windows: start={start_window_ms}ms, pause={pause_window_ms}ms, stop={stop_window_ms}ms")
+        logging.info(f"VAD thresholds: voice={voice_ratio}, silence={silence_ratio}")
 
     def start_session(self, current_time):
-        """Begin a recording session (records session start time).
+        """Start recording session (record start time)
 
         Args:
-            current_time: Current wall clock (e.g., time.time()).
+            current_time: Current time (time.time() value)
         """
         self.recording_start_time = current_time
         self.state = self.STATE_IDLE
-        logging.info(f"VAD session started with a {self.grace_period_sec}s grace period")
+        logging.info(f"VAD session started with {self.grace_period_sec}s grace period")
 
     def is_in_grace_period(self, current_time):
-        """Check whether we are still within the initial grace period.
+        """Check if within grace period
 
         Args:
-            current_time: Current wall clock (e.g., time.time()).
+            current_time: Current time (time.time() value)
 
         Returns:
-            bool: True if within grace period.
+            bool: True if within grace period
         """
         if self.recording_start_time is None:
             return False
@@ -133,27 +120,27 @@ class VADController:
         return elapsed < self.grace_period_sec
 
     def process_frame(self, frame_bytes, current_time):
-        """Process one PCM frame and decide state transitions.
+        """Process audio frame and determine state transitions.
 
         Args:
-            frame_bytes: int16 PCM (little-endian) mono; length must be samples_per_frame * 2.
-            current_time: Current wall clock (e.g., time.time()).
+            frame_bytes: int16 PCM data (self.samples_per_frame * 2 bytes)
+            current_time: Current time (time.time() value)
 
         Returns:
             dict: {
-                'state': current state (STATE_IDLE / STATE_RECORDING / STATE_PAUSED),
+                'state': Current state (STATE_IDLE/RECORDING/PAUSED),
                 'action': 'start' | 'pause' | 'resume' | 'stop' | None,
-                'prebuffer': list of frames to prepend on 'start'/'resume', else None,
-                'should_record': whether to write this frame,
-                'pause_count': total number of pauses so far,
-                'in_grace_period': whether grace period is active
+                'prebuffer': Prebuffer data (when action='start'/'resume'),
+                'should_record': Whether to record current frame,
+                'pause_count': Total pause count,
+                'in_grace_period': Whether in grace period
             }
         """
         # Validate frame size
         expected_size = self.samples_per_frame * 2  # int16 = 2 bytes
         if len(frame_bytes) != expected_size:
             logging.warning(f"Frame size mismatch: expected {expected_size}, got {len(frame_bytes)}")
-            # If size is off, skip VAD decision but keep recording to avoid data loss
+            # If size doesn't match, skip VAD and just record
             return {
                 'state': self.state,
                 'action': None,
@@ -168,32 +155,32 @@ class VADController:
             is_voiced = self.vad.is_speech(frame_bytes, self.sample_rate)
         except Exception as e:
             logging.error(f"VAD processing error: {e}")
-            # On VAD errors, treat as voiced to avoid dropping audio
+            # On VAD error, assume voice
             is_voiced = True
 
         self.sliding_window.append(is_voiced)
         self.frame_counter += 1
 
-        # Only compute ratios periodically
+        # Check if periodic check needed
         should_check = (self.frame_counter % self.check_interval == 0)
 
-        # Initialize outputs
+        # Initialize results
         action = None
         prebuffer_data = None
         should_record = False
         in_grace_period = self.is_in_grace_period(current_time)
 
-        # State handling
+        # Process by state
         if self.state == self.STATE_IDLE:
-            # In IDLE: keep collecting prebuffer only
+            # IDLE state: only store in prebuffer
             self.prebuffer.append(frame_bytes)
 
-            # Check start/resume condition
+            # Check recording start condition
             if should_check and len(self.sliding_window) >= self.start_window_frames:
                 voice_ratio = self._calc_voice_ratio(self.start_window_frames)
 
                 if voice_ratio >= self.voice_ratio_threshold:
-                    # Transition to RECORDING
+                    # Start recording
                     self.state = self.STATE_RECORDING
                     action = 'start'
                     prebuffer_data = list(self.prebuffer)
@@ -202,17 +189,17 @@ class VADController:
                     logging.info(f"VAD: Recording started (voice ratio: {voice_ratio:.2f})")
 
         elif self.state == self.STATE_RECORDING:
-            # In RECORDING: always record
+            # RECORDING state: always record
             should_record = True
             self.prebuffer.append(frame_bytes)
 
-            # After grace period, check for pause
-            if (not in_grace_period) and should_check and len(self.sliding_window) >= self.pause_window_frames:
+            # Check pause only after grace period
+            if not in_grace_period and should_check and len(self.sliding_window) >= self.pause_window_frames:
                 voice_ratio = self._calc_voice_ratio(self.pause_window_frames)
                 silence_ratio = 1.0 - voice_ratio
 
                 if silence_ratio >= self.silence_ratio_threshold:
-                    # Transition to PAUSED
+                    # Pause
                     self.state = self.STATE_PAUSED
                     action = 'pause'
                     self.pause_count += 1
@@ -220,15 +207,15 @@ class VADController:
                     logging.info(f"VAD: Paused #{self.pause_count} (silence ratio: {silence_ratio:.2f})")
 
         elif self.state == self.STATE_PAUSED:
-            # In PAUSED: collect into prebuffer
+            # PAUSED state: only store in prebuffer
             self.prebuffer.append(frame_bytes)
 
-            # Check for resume
+            # Check resume
             if should_check and len(self.sliding_window) >= self.start_window_frames:
                 voice_ratio_short = self._calc_voice_ratio(self.start_window_frames)
 
                 if voice_ratio_short >= self.voice_ratio_threshold:
-                    # Transition back to RECORDING
+                    # Resume
                     self.state = self.STATE_RECORDING
                     action = 'resume'
                     prebuffer_data = list(self.prebuffer)
@@ -236,13 +223,13 @@ class VADController:
                     should_record = True
                     logging.info(f"VAD: Resumed (voice ratio: {voice_ratio_short:.2f})")
 
-            # Check for long-stop
+            # Check stop
             if should_check and len(self.sliding_window) >= self.stop_window_frames:
                 voice_ratio_long = self._calc_voice_ratio(self.stop_window_frames)
                 silence_ratio_long = 1.0 - voice_ratio_long
 
                 if silence_ratio_long >= self.silence_ratio_threshold:
-                    # Auto-stop back to IDLE
+                    # Stop
                     self.state = self.STATE_IDLE
                     action = 'stop'
                     self._reset()
@@ -258,34 +245,34 @@ class VADController:
         }
 
     def _calc_voice_ratio(self, num_frames):
-        """Compute voiced ratio over the last `num_frames` in the sliding window.
+        """Calculate voice ratio in sliding window
 
         Args:
-            num_frames: number of frames to consider.
+            num_frames: Number of frames to calculate
 
         Returns:
-            float: voiced ratio in [0.0, 1.0].
+            float: Voice ratio (0.0-1.0)
         """
         window_len = len(self.sliding_window)
         if window_len < num_frames:
             return 0.0
 
-        # Slice the most recent num_frames
+        # Slice last num_frames
         start_idx = window_len - num_frames
         voice_count = sum(islice(self.sliding_window, start_idx, None))
         return voice_count / num_frames
 
     def _reset(self):
-        """Reset internal counters and buffers (pause_count is preserved as session stats)."""
+        """Reset internal state (counters and buffers)"""
         self.sliding_window.clear()
         self.prebuffer.clear()
         self.frame_counter = 0
-        # Note: pause_count is kept.
+        # Keep pause_count as it's session statistics
 
     def force_stop(self):
-        """Force a full stop (manual termination of the session).
+        """Force stop (called on manual stop)
 
-        Resets recording session and all internal state.
+        Completely ends the recording session and resets all states.
         """
         self.state = self.STATE_IDLE
         self.recording_start_time = None
@@ -294,23 +281,23 @@ class VADController:
         logging.info("VAD: Force stopped and reset")
 
     def get_state_name(self):
-        """Return the current state's display name (Korean strings kept for UI compatibility).
+        """Return current state name
 
         Returns:
-            str: "대기" (idle), "녹음중" (recording), or "일시정지" (paused).
+            str: State name ("Idle", "Recording", "Paused")
         """
         state_names = {
-            self.STATE_IDLE: "대기",
-            self.STATE_RECORDING: "녹음중",
-            self.STATE_PAUSED: "일시정지"
+            self.STATE_IDLE: "Idle",
+            self.STATE_RECORDING: "Recording",
+            self.STATE_PAUSED: "Paused"
         }
-        return state_names.get(self.state, "알 수 없음")
+        return state_names.get(self.state, "Unknown")
 
     def get_stats(self):
-        """Return statistics for monitoring/telemetry.
+        """Return statistics
 
         Returns:
-            dict: includes display state name, pause count, frame counter, and buffer sizes.
+            dict: Statistics (state, pause count, frame count, etc.)
         """
         return {
             'state': self.get_state_name(),
