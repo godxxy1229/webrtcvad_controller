@@ -228,14 +228,18 @@ Ensure your audio frames are exactly `sample_rate * frame_ms / 1000 * 2` bytes. 
 
 ### Too Sensitive (Frequent Pausing)
 - Increase `aggr` (0 → 1 or 2)
+- Increase `start_window_ms`
 - Increase `pause_window_ms`
-- Decrease `silence_ratio`
+- Increase `voice_ratio`
+- Increase `silence_ratio`
 
 ### Not Sensitive Enough (Doesn't Pause)
 - Decrease `aggr` (2 → 1 or 0)
+- Decrease `start_window_ms`
 - Decrease `pause_window_ms`
-- Increase `silence_ratio`
+- Decrease `voice_ratio`
+- Decrease `silence_ratio`
 
 ### Missing Speech Onset
-- Increase `prebuffer_ms` (e.g., 2000ms)
-- Decrease `start_window_ms` for faster response
+- Increase `prebuffer_ms` (e.g., 1800ms)
+- Decrease `start_window_ms` for faster response  (e.g., 300ms)
